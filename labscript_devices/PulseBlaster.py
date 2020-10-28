@@ -886,7 +886,7 @@ class PulseblasterWorker(Worker):
         self.time_based_shot_end_time = None
     
     def pb_get_error():
-    return pb_status_message()
+        return pb_status_message()
     
     def program_manual(self,values):
     
