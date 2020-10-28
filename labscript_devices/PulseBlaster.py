@@ -36,6 +36,8 @@ import labscript_utils.h5_lock, h5py
 
 import time
 
+
+
 class PulseBlasterDDS(DDSQuantity):
     description = 'PulseBlasterDDS'
     def __init__(self, *args, **kwargs):
@@ -851,7 +853,7 @@ class PulseBlasterTab(DeviceTab):
         self.statemachine_timeout_add(100,self.status_monitor,notify_queue)
 
 
-class PulseblasterWorker(Worker):
+class PulseblasterWorker(Worker): 
     def init(self):
         exec('from spinapi import *', globals())
         global h5py; import labscript_utils.h5_lock, h5py
@@ -882,7 +884,10 @@ class PulseblasterWorker(Worker):
         self.time_based_stop_workaround = False
         self.time_based_shot_duration = None
         self.time_based_shot_end_time = None
-
+    
+    def pb_get_error():
+    return pb_status_message()
+    
     def program_manual(self,values):
     
         if self.programming_scheme == 'pb_stop_programming/STOP':
