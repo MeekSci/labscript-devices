@@ -226,7 +226,7 @@ class NI_DAQmxOutputWorker(Worker):
                 DAQmx_Val_FiniteSamps,
                 npts,
             )
-
+            
             # Write data. See the comment in self.program_manual as to why we are using
             # uint32 instead of the native size of each port.
             self.DO_task.WriteDigitalU32(
@@ -290,7 +290,6 @@ class NI_DAQmxOutputWorker(Worker):
                 DAQmx_Val_FiniteSamps,
                 npts,
             )
-
             # Write data:
             self.AO_task.WriteAnalogF64(
                 npts,
@@ -350,12 +349,13 @@ class NI_DAQmxOutputWorker(Worker):
             self.DO_task = None
 
         for task, static, name in tasks:
+            exception_flag = False
             if not abort:
                 if not static:
                     try:
                         # Wait for task completion with a 1 second timeout:
                         task.WaitUntilTaskDone(1)
-                    finally:
+                    except DigOutputOverrunError:
                         # Log where we were up to in sample generation, regardless of
                         # whether the above succeeded:
                         task.GetWriteCurrWritePos(npts)
@@ -364,8 +364,27 @@ class NI_DAQmxOutputWorker(Worker):
                         # seems to indicate the task was not started:
                         current = samples.value if samples.value != 2 ** 64 - 1 else -1
                         total = npts.value if npts.value != 2 ** 64 - 1 else -1
-                        msg = 'Stopping %s at sample %d of %d'
+                        msg = 'DigOutputOverrunError occured. Digital output detected a new sample '    \
+                            + 'clock edge before the previous sample could be written from the onboard '\
+                            + 'memory. Shot Failed. Stopping %s at sample %d of %d.'
                         self.logger.info(msg, name, current, total)
+                        task.ClearTask()
+                        DAQmxResetDevice(self.MAX_name)
+                        self.start_manual_mode_tasks()
+                        exception_flag = True
+                        return True
+                    finally:
+                        if exception_flag == False:
+                            # Log where we were up to in sample generation, regardless of
+                            # whether the above succeeded:
+                            task.GetWriteCurrWritePos(npts)
+                            task.GetWriteTotalSampPerChanGenerated(samples)
+                            # Detect -1 even though they're supposed to be unsigned ints, -1
+                            # seems to indicate the task was not started:
+                            current = samples.value if samples.value != 2 ** 64 - 1 else -1
+                            total = npts.value if npts.value != 2 ** 64 - 1 else -1
+                            msg = 'Stopping %s at sample %d of %d'
+                            self.logger.info(msg, name, current, total)
                 task.StopTask()
             task.ClearTask()
 
