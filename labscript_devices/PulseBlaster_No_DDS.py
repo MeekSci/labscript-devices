@@ -60,11 +60,49 @@ from blacs.device_base_class import DeviceTab
 from qtutils import UiLoader
 import qtutils.icons
 import os
+import time
+from html import escape
 
 # We can't import * from QtCore & QtGui, as one of them has a function called bin() which overrides the builtin, which is used in the pulseblaster worker
 from qtutils.qt import QtCore
 from qtutils.qt import QtGui
 from qtutils.qt import QtWidgets
+
+def new_pb_get_error():
+    global _spinapi
+    import os
+    import sys
+    import platform
+    import ctypes
+
+    this_folder = os.path.abspath(os.path.realpath(os.path.dirname(__file__)))
+    try:    
+        _spinapi
+    except NameError:
+        arch = platform.architecture()
+        if arch == ('32bit', 'WindowsPE'):
+            libname = 'spinapi.dll'
+        elif arch == ('64bit', 'WindowsPE'):
+            libname = 'spinapi64.dll'
+        elif arch == ('32bit', 'ELF'):
+            libname = os.path.join(this_folder, 'libspinapi.so')
+        elif arch == ('64bit', 'ELF'):
+            libname = os.path.join(this_folder, 'libspinapi64.so')
+
+    _spinapi = ctypes.cdll.LoadLibrary(libname)
+    _spinapi.pb_read_status.restype = ctypes.c_int32
+    status = _spinapi.pb_read_status()
+    status_message = "Status error: "
+    if status == -1:
+        status_message = status_message + "can't communicate with board."
+    elif status == -2:
+        status_message = status_message + "connection with the board timed out while sending address."
+    elif status == -3:
+        status_message = status_message + "connection with board timed out while receiving data."
+    else:
+        status_message = status_message + "can't communicate with board, or some other unknown error with error code: " + str(status)
+    status_message = status_message + "\nTry reinstalling SpinAPI or make sure Pulseblaster is present.\n"
+    return status_message
 
 @BLACS_tab
 class Pulseblaster_No_DDS_Tab(DeviceTab):
@@ -227,11 +265,10 @@ class Pulseblaster_No_DDS_Tab(DeviceTab):
         self.start()
         self.statemachine_timeout_add(100,self.status_monitor,notify_queue)
 
-
 class PulseblasterNoDDSWorker(Worker):
     core_clock_freq = 100
     def init(self):
-        exec('from spinapi import *', globals())
+        exec('from spinapi import *\nspinapi.pb_get_error = new_pb_get_error', globals())
         global h5py; import labscript_utils.h5_lock, h5py
         global zprocess; import zprocess
         
