@@ -133,6 +133,7 @@ from qtutils.qt import QtWidgets
 class Pulseblaster_No_DDS_Tab(DeviceTab):
     # Capabilities
     num_DO = 24
+    PB_timeout_value = 60
     def __init__(self,*args,**kwargs):
         if not hasattr(self,'device_worker_class'):
             self.device_worker_class = PulseblasterNoDDSWorker
@@ -201,7 +202,7 @@ class Pulseblaster_No_DDS_Tab(DeviceTab):
         
         # Status monitor timout
         self.statemachine_timeout_add(2000, self.status_monitor)
-        self.TIME_OUT_VALUE = 60
+        self.TIME_OUT_VALUE = self.PB_timeout_value
         
     def get_child_from_connection_table(self, parent_device_name, port):
         # This is a direct output, let's search for it on the internal intermediate device called 
@@ -236,7 +237,32 @@ class Pulseblaster_No_DDS_Tab(DeviceTab):
         # When called with a queue, this function writes to the queue
         # when the pulseblaster is waiting. This indicates the end of
         # an experimental run.
-        self.status, waits_pending, time_based_shot_over = yield(self.queue_work(self._primary_worker,'check_status'))
+        try:
+            self.status, waits_pending, time_based_shot_over = yield(self.queue_work(self._primary_worker,'check_status'))
+        except TimeoutError:
+            self.logger.info('Worker timed out. Trying again..')
+            try:
+                self.status, waits_pending, time_based_shot_over = yield(self.queue_work(self._primary_worker,'check_status'))
+            except TimeoutError:
+                self.logger.info('Worker not responding. Shot Failed.')
+                if self.mode == 1:
+                    self.restart()
+                elif self.mode == 2:
+                    try:
+                        self.abort_transition_to_buffered()
+                    except TimeoutError:
+                        self.restart()
+                elif self.mode == 4:
+                    self.restart()
+                elif self.mode == 8:
+                    try:
+                        self.abort_buffered()
+                    except TimeoutError:
+                        self.restart()
+                else:
+                    self.logger.info('Invalid mode.')
+                    raise   TimeoutError('Error restarting tab during timeout.')
+
         if self.programming_scheme == 'pb_start/BRANCH':
             done_condition = self.status['waiting']
         elif self.programming_scheme == 'pb_stop_programming/STOP':
@@ -292,6 +318,7 @@ class Pulseblaster_No_DDS_Tab(DeviceTab):
 
 class PulseblasterNoDDSWorker(Worker):
     core_clock_freq = 100
+    PB_timeout_value = 60
     def init(self):
         exec('from spinapi import *\nspinapi.pb_get_error = n_pb_get_error\npb_read_status = n_pb_read_status', globals())
         global h5py; import labscript_utils.h5_lock, h5py
@@ -320,7 +347,7 @@ class PulseblasterNoDDSWorker(Worker):
         self.time_based_stop_workaround = False
         self.time_based_shot_duration = None
         self.time_based_shot_end_time = None
-        self.TIME_OUT_VALUE = 60
+        self.TIME_OUT_VALUE = self.PB_timeout_value
 
     def program_manual(self,values):
         # Program the DDS registers:
@@ -475,12 +502,10 @@ class PulseblasterNoDDSWorker(Worker):
             # Since we are converting from an integer to a binary string, we need to reverse the string! (see notes above when we create flags variables)
             return_flags = str(bin(flags)[2:]).rjust(self.num_DO,'0')[::-1]
             for i in range(self.num_DO):
-                return_values['flag %d'%i] = return_flags[i]
-                
+                return_values['flag %d'%i] = return_flags[i]   
             return return_values
             
     def check_status(self):
-        self.logger.info('0')
         if self.waits_pending:
             try:
                 self.all_waits_finished.wait(self.h5file, timeout=0)
