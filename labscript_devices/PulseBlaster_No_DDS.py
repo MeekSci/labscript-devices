@@ -422,7 +422,6 @@ class PulseblasterNoDDSWorker(Worker):
             
             # Now for the pulse program:
             pulse_program = group['PULSE_PROGRAM'][2:]
-            
             #Let's get the final state of the pulseblaster. z's are the args we don't need:
             flags,z,z,z = pulse_program[-1]
             

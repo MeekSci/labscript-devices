@@ -13,6 +13,8 @@
 import sys
 import time
 import threading
+import platform
+import subprocess
 from PyDAQmx import *
 from PyDAQmx.DAQmxConstants import *
 from PyDAQmx.DAQmxTypes import *
@@ -37,7 +39,6 @@ from .daqmx_utils import incomplete_sample_detection
 
 class NI_DAQmxOutputWorker(Worker):
     #Turn this on if NI devices refuse to restart after error -200946
-    FORCE_RESTART_USB = True
     def init(self):
         self.check_version()
         # Reset Device: clears previously added routes etc. Note: is insufficient for
@@ -402,7 +403,23 @@ class NI_DAQmxOutputWorker(Worker):
                             + 'sample %d of %d.'
                         self.logger.info(msg, name, current, total)
                         task.ClearTask()
-                        #if FORCE_RESTART_USB == True:
+                        if self.FORCE_RESTART_USB == True:
+                            self.logger.info('Attempting to restart NI bus...')
+                            try:
+                                _WindowsSdkDir
+                            except NameError:
+                                system_type = platform.architecture()
+                                if system_type == ('32bit', 'WindowsPE'):
+                                    _WindowsSdkDir = '"%WindowsSdkDir%\\tools\\x86\\devcon.exe"'
+                                elif system_type == ('64bit', 'WindowsPE'):
+                                    _WindowsSdkDir = '"%WindowsSdkDir%\\tools\\x64\\devcon.exe"'
+                                else:
+                                    self.logger.info('Warning: Unable to detect OS or not Windows platform.')
+                                    _WindowsSdkDir = ''
+                            command = _WindowsSdkDir + ' restart *' + self.USB_bus_name + '*'
+                            result = subprocess.run(command, shell=True)
+                            threading.Event().wait(15)
+                            self.logger.info('Restart attempted. Result: %s', result)
                         DAQmxResetDevice(self.MAX_name)
                         self.start_manual_mode_tasks()
                         exception_flag = True
