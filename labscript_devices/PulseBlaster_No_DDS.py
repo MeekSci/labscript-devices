@@ -138,6 +138,8 @@ class Pulseblaster_No_DDS_Tab(DeviceTab):
         
         # Status monitor timout
         self.statemachine_timeout_add(2000, self.status_monitor)
+        #This adds in the ability to set a timeout value for zprocess
+        self.TIME_OUT_VALUE = connection_object.properties.get('PB_timeout_value', None)
         
     def get_child_from_connection_table(self, parent_device_name, port):
         # This is a direct output, let's search for it on the internal intermediate device called 
@@ -172,7 +174,31 @@ class Pulseblaster_No_DDS_Tab(DeviceTab):
         # When called with a queue, this function writes to the queue
         # when the pulseblaster is waiting. This indicates the end of
         # an experimental run.
-        self.status, waits_pending, time_based_shot_over = yield(self.queue_work(self._primary_worker,'check_status'))
+        try:
+            self.status, waits_pending, time_based_shot_over = yield(self.queue_work(self._primary_worker,'check_status'))
+        except TimeoutError:
+            self.logger.info('Worker timed out. Trying again..')
+            try:
+                self.status, waits_pending, time_based_shot_over = yield(self.queue_work(self._primary_worker,'check_status'))
+            except TimeoutError:
+                self.logger.info('Worker not responding. Shot Failed.')
+                if self.mode == 1:
+                    self.restart()
+                elif self.mode == 2:
+                    try:
+                        self.abort_transition_to_buffered()
+                    except TimeoutError:
+                        self.restart()
+                elif self.mode == 4:
+                    self.restart()
+                elif self.mode == 8:
+                    try:
+                        self.abort_buffered()
+                    except TimeoutError:
+                        self.restart()
+                else:
+                    self.logger.info('Invalid mode.')
+                    raise   TimeoutError('Error restarting tab during timeout.')
         
         if self.programming_scheme == 'pb_start/BRANCH':
             done_condition = self.status['waiting']
@@ -258,6 +284,7 @@ class PulseblasterNoDDSWorker(Worker):
         self.time_based_stop_workaround = False
         self.time_based_shot_duration = None
         self.time_based_shot_end_time = None
+        self.TIME_OUT_VALUE = self.PB_timeout_value
 
     def program_manual(self,values):
         # Program the DDS registers:
