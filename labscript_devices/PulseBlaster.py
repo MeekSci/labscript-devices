@@ -132,18 +132,20 @@ class PulseBlaster(PseudoclockDevice):
     allowed_children = [Pseudoclock]
     
     @set_passed_properties(
-        property_names = {"connection_table_properties": ["firmware",  "programming_scheme"],
+        property_names = {"connection_table_properties": ["firmware",  "programming_scheme", "PB_timeout_value"],
                           "device_properties": ["pulse_width", "max_instructions",
                                                 "time_based_stop_workaround",
                                                 "time_based_stop_workaround_extra_time"]}
         )
     def __init__(self, name, trigger_device=None, trigger_connection=None, board_number=0, firmware = '',
                  programming_scheme='pb_start/BRANCH', pulse_width='symmetric', max_instructions=4000,
-                 time_based_stop_workaround=False, time_based_stop_workaround_extra_time=0.5, **kwargs):
+                 time_based_stop_workaround=False, time_based_stop_workaround_extra_time=0.5, PB_timeout_value=None, **kwargs):
         PseudoclockDevice.__init__(self, name, trigger_device, trigger_connection, **kwargs)
         self.BLACS_connection = board_number
         # TODO: Implement capability checks based on firmware revision of PulseBlaster
         self.firmware_version = firmware
+        #This adds in the ability to set a timeout value for zprocess
+        self.PB_timeout_value = PB_timeout_value
         
         # time_based_stop_workaround is for old pulseblaster models which do
         # not respond correctly to status checks. These models provide no way
@@ -761,6 +763,8 @@ class PulseBlasterTab(DeviceTab):
         
         # Create status monitor timout
         self.statemachine_timeout_add(2000, self.status_monitor)
+        #This adds in the ability to set a timeout value for zprocess
+        self.TIME_OUT_VALUE = connection_object.properties.get('PB_timeout_value', None)
         
     def get_child_from_connection_table(self, parent_device_name, port):
         # This is a direct output, let's search for it on the internal intermediate device called 
@@ -795,7 +799,31 @@ class PulseBlasterTab(DeviceTab):
         # When called with a queue, this function writes to the queue
         # when the pulseblaster is waiting. This indicates the end of
         # an experimental run.
-        self.status, waits_pending, time_based_shot_over = yield(self.queue_work(self._primary_worker,'check_status'))
+        try:
+            self.status, waits_pending, time_based_shot_over = yield(self.queue_work(self._primary_worker,'check_status'))
+        except TimeoutError:
+            self.logger.info('Worker timed out. Trying again..')
+            try:
+                self.status, waits_pending, time_based_shot_over = yield(self.queue_work(self._primary_worker,'check_status'))
+            except TimeoutError:
+                self.logger.info('Worker not responding. Shot Failed.')
+                if self.mode == 1:
+                    self.restart()
+                elif self.mode == 2:
+                    try:
+                        self.abort_transition_to_buffered()
+                    except TimeoutError:
+                        self.restart()
+                elif self.mode == 4:
+                    self.restart()
+                elif self.mode == 8:
+                    try:
+                        self.abort_buffered()
+                    except TimeoutError:
+                        self.restart()
+                else:
+                    self.logger.info('Invalid mode.')
+                    raise   TimeoutError('Error restarting tab during timeout.')
         
         if self.programming_scheme == 'pb_start/BRANCH':
             done_condition = self.status['waiting']
@@ -882,6 +910,7 @@ class PulseblasterWorker(Worker):
         self.time_based_stop_workaround = False
         self.time_based_shot_duration = None
         self.time_based_shot_end_time = None
+        self.TIME_OUT_VALUE = self.PB_timeout_value
 
     def program_manual(self,values):
     
@@ -1340,5 +1369,3 @@ class PulseBlasterParser(object):
             # Note: Using the inline if statement reduces the runtime (of this for loop) by 50%
             amp = current_dds['AMP'][row[current_strings['amp']]] if row[current_strings['dds_en']] else 0
             traces[current_strings['ddsamp']].append(amp)
-            
-            
