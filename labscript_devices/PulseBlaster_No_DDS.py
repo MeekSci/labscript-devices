@@ -17,6 +17,67 @@ from labscript import PseudoclockDevice, config
 
 import numpy as np
 
+def n_pb_read_status():
+    # Since we're overriding part of the python library spinapi we'll need to import what's needed to setup the SpinAPI driver
+    global _spinapi
+    import os
+    import sys
+    import platform
+    import ctypes
+
+    #list of PB errors from the SpinAPI or experimenting by breaking things
+    PB_ERRORS = {
+        -1:'Can\'t communicate with board.',
+        -2:'Connection with the board timed out while sending address.',
+        -3:'Connection with board timed out while receiving data.',
+        13:'No Pulseblaster device present.',
+        -9:'Connection timed out.'
+        }
+    #Set the path for the driver
+    this_folder = os.path.abspath(os.path.realpath(os.path.dirname(__file__)))
+    
+    #Check if the name has been setup yet
+    try:    
+        _spinapi
+    #If not then set it up
+    except NameError:
+        arch = platform.architecture()
+        if arch == ('32bit', 'WindowsPE'):
+            libname = 'spinapi.dll'
+        elif arch == ('64bit', 'WindowsPE'):
+            libname = 'spinapi64.dll'
+        elif arch == ('32bit', 'ELF'):
+            libname = os.path.join(this_folder, 'libspinapi.so')
+        elif arch == ('64bit', 'ELF'):
+            libname = os.path.join(this_folder, 'libspinapi64.so')
+        
+    #load the SpinAPI so it's called with _spinapi
+        _spinapi = ctypes.cdll.LoadLibrary(libname)
+    #Let python knows this is a C Integer
+    _spinapi.pb_read_status.restype = ctypes.c_uint32
+    #Check the status of the board
+    status = _spinapi.pb_read_status()
+
+    #Check if an error code is present, either by a negative being present 
+    #or the 'Windows cant see the PB' code thats a +13 for some reason 
+    if ctypes.c_int32(status).value < 0 or status == 13:
+    #Create a string buffer for the SpinAPI's error function to modify
+        buf = ctypes.create_string_buffer(512)
+    #Retrieve the last error state recorded
+        _spinapi.pb_get_last_error(buf, 512)
+    #Set the corresponding output message, blank for OK or the relevant error
+        status_message = PB_ERRORS.get(ctypes.c_int32(status).value, 'Unknown error. ') + ' Error ({}, {})'.format(buf.value, ctypes.c_int32(status).value)
+    else:
+        status_message = ''
+
+    #Convert to reversed binary string
+    status = format(status, '032b')[::-1]
+    
+    return {"stopped":bool(int(status[0])),"reset":bool(int(status[1])),"running":bool(int(status[2])), "waiting":bool(int(status[3])), "error":bool(int(status[-1])), "errorMessage":status_message}
+
+#This is to override the deprecated function pb_get_error used by the python spinapi library and make it use the new pb_read_status
+def n_pb_get_error():
+    return n_pb_read_status()["errorMessage"]
 
 class PulseBlaster_No_DDS(PulseBlaster):
 
@@ -231,7 +292,7 @@ class Pulseblaster_No_DDS_Tab(DeviceTab):
 class PulseblasterNoDDSWorker(Worker):
     core_clock_freq = 100
     def init(self):
-        exec('from spinapi import *', globals())
+        exec('from spinapi import *\nspinapi.pb_get_error = n_pb_get_error\npb_read_status = n_pb_read_status', globals())
         global h5py; import labscript_utils.h5_lock, h5py
         global zprocess; import zprocess
         
@@ -428,7 +489,17 @@ class PulseblasterNoDDSWorker(Worker):
             time_based_shot_over = time.time() > self.time_based_shot_end_time
         else:
             time_based_shot_over = None
-        return pb_read_status(), self.waits_pending, time_based_shot_over
+            #Get the current status of the board
+            PBStatus = pb_read_status()
+            #Check if it is in an error state
+            if PBStatus["error"] == True:
+                self.logger.info('Pulseblaster encountered an error. ', PBStatus['errorMessage'], ' Shot Failed.')
+                self.abort_buffered()
+            #Otherwise get rid of the error stuff so Labscript can get the Running/Waiting/Stopped/Reset values it expects
+            else:
+                del PBStatus["error"]
+                del PBStatus["errorMessage"]
+        return PBStatus, self.waits_pending, time_based_shot_over
         
     def transition_to_manual(self):
         status, waits_pending, time_based_shot_over = self.check_status()
