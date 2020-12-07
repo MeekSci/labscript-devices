@@ -350,22 +350,73 @@ class NI_DAQmxOutputWorker(Worker):
             self.DO_task = None
 
         for task, static, name in tasks:
+            exception_flag = False
             if not abort:
                 if not static:
                     try:
                         # Wait for task completion with a 1 second timeout:
                         task.WaitUntilTaskDone(1)
-                    finally:
-                        # Log where we were up to in sample generation, regardless of
-                        # whether the above succeeded:
+                    except DigOutputOverrunError:
                         task.GetWriteCurrWritePos(npts)
                         task.GetWriteTotalSampPerChanGenerated(samples)
-                        # Detect -1 even though they're supposed to be unsigned ints, -1
-                        # seems to indicate the task was not started:
                         current = samples.value if samples.value != 2 ** 64 - 1 else -1
                         total = npts.value if npts.value != 2 ** 64 - 1 else -1
-                        msg = 'Stopping %s at sample %d of %d'
+                        msg = 'DigOutputOverrunError occured. Digital output detected a new sample '    \
+                            + 'clock edge before the previous sample could be written from the onboard '\
+                            + 'memory. Shot Failed. Stopping %s at sample %d of %d.'
                         self.logger.info(msg, name, current, total)
+                        task.ClearTask()
+                        DAQmxResetDevice(self.MAX_name)
+                        self.start_manual_mode_tasks()
+                        exception_flag = True
+                        return True
+                    except DACUnderflowError:
+                        task.GetWriteCurrWritePos(npts)
+                        task.GetWriteTotalSampPerChanGenerated(samples)
+                        current = samples.value if samples.value != 2 ** 64 - 1 else -1
+                        total = npts.value if npts.value != 2 ** 64 - 1 else -1
+                        msg = 'DACUnderflowError occured. Decrease the output frequency to '    \
+                            + 'increase the period between DAC conversions, or reduce the size of ' \
+                            + 'your output buffer in order to write data more often. If you are '   \
+                            + 'using an external clock, check  your signal for the presence of '    \
+                            + 'noise or glitches. Shot Failed. Stopping %s at sample %d of %d.'
+                        self.logger.info(msg, name, current, total)
+                        task.ClearTask()
+                        DAQmxResetDevice(self.MAX_name)
+                        self.start_manual_mode_tasks()
+                        exception_flag = True
+                        return True
+                    except StartFailedDueToWriteFailureError:
+                        task.GetWriteCurrWritePos(npts)
+                        task.GetWriteTotalSampPerChanGenerated(samples)
+                        current = samples.value if samples.value != 2 ** 64 - 1 else -1
+                        total = npts.value if npts.value != 2 ** 64 - 1 else -1
+                        msg = 'StartFailedDueToWriteFailureError occured. Task could not be started,'   \
+                            + ' because the driver could not write enough data to the device. This '    \
+                            + 'was due to system and/or bus-bandwidth limitations. Reduce the number '  \
+                            + 'of programs your computer is executing concurrently. If possible, '  \
+                            + 'perform operations with heavy bus usage sequentially instead of in ' \
+                            + 'parallel. If you can\'t eliminate the problem, contact National '    \
+                            + 'Instruments support at ni.com/support. Shot Failed. Stopping %s at ' \
+                            + 'sample %d of %d.'
+                        self.logger.info(msg, name, current, total)
+                        task.ClearTask()
+                        DAQmxResetDevice(self.MAX_name)
+                        self.start_manual_mode_tasks()
+                        exception_flag = True
+                        return True
+                    finally:
+                        if exception_flag == False:
+                            # Log where we were up to in sample generation, regardless of
+                            # whether the above succeeded:
+                            task.GetWriteCurrWritePos(npts)
+                            task.GetWriteTotalSampPerChanGenerated(samples)
+                            # Detect -1 even though they're supposed to be unsigned ints, -1
+                            # seems to indicate the task was not started:
+                            current = samples.value if samples.value != 2 ** 64 - 1 else -1
+                            total = npts.value if npts.value != 2 ** 64 - 1 else -1
+                            msg = 'Stopping %s at sample %d of %d'
+                            self.logger.info(msg, name, current, total)
                 task.StopTask()
             task.ClearTask()
 
