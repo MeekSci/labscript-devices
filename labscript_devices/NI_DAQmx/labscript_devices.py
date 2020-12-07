@@ -75,6 +75,8 @@ class NI_DAQmx(IntermediateDevice):
                 "clock_limit",
                 "wait_monitor_minimum_pulse_width",
                 "wait_monitor_supports_wait_completed_events",
+                "USB_bus_name",
+                "FORCE_RESTART_USB"
             ],
             "device_properties": ["acquisition_rate"],
         }
@@ -104,6 +106,8 @@ class NI_DAQmx(IntermediateDevice):
         supports_buffered_AO=False,
         supports_buffered_DO=False,
         supports_semiperiod_measurement=False,
+        USB_bus_name=None,
+        FORCE_RESTART_USB=False,
         **kwargs
     ):
         """Generic class for NI_DAQmx devices."""
@@ -153,6 +157,8 @@ class NI_DAQmx(IntermediateDevice):
         self.supports_buffered_AO = supports_buffered_AO
         self.supports_buffered_DO = supports_buffered_DO
         self.supports_semiperiod_measurement = supports_semiperiod_measurement
+        self.USB_bus_name = USB_bus_name
+        self.FORCE_RESTART_USB = FORCE_RESTART_USB
 
         if self.supports_buffered_DO and self.supports_buffered_AO:
             self.clock_limit = min(self.max_DO_sample_rate, self.max_AO_sample_rate)
