@@ -11,6 +11,8 @@
 #                                                                   #
 #####################################################################
 import sys
+import os
+import platform
 import time
 import threading
 from PyDAQmx import *
@@ -370,22 +372,22 @@ class NI_DAQmxOutputWorker(Worker):
                         self.start_manual_mode_tasks()
                         exception_flag = True
                         return True
-                    except DACUnderflowError:
-                        task.GetWriteCurrWritePos(npts)
-                        task.GetWriteTotalSampPerChanGenerated(samples)
-                        current = samples.value if samples.value != 2 ** 64 - 1 else -1
-                        total = npts.value if npts.value != 2 ** 64 - 1 else -1
-                        msg = 'DACUnderflowError occured. Decrease the output frequency to '    \
-                            + 'increase the period between DAC conversions, or reduce the size of ' \
-                            + 'your output buffer in order to write data more often. If you are '   \
-                            + 'using an external clock, check  your signal for the presence of '    \
-                            + 'noise or glitches. Shot Failed. Stopping %s at sample %d of %d.'
-                        self.logger.info(msg, name, current, total)
-                        task.ClearTask()
-                        DAQmxResetDevice(self.MAX_name)
-                        self.start_manual_mode_tasks()
-                        exception_flag = True
-                        return True
+                    # except DACUnderflowError:
+                        # task.GetWriteCurrWritePos(npts)
+                        # task.GetWriteTotalSampPerChanGenerated(samples)
+                        # current = samples.value if samples.value != 2 ** 64 - 1 else -1
+                        # total = npts.value if npts.value != 2 ** 64 - 1 else -1
+                        # msg = 'DACUnderflowError occured. Decrease the output frequency to '    \
+                            # + 'increase the period between DAC conversions, or reduce the size of ' \
+                            # + 'your output buffer in order to write data more often. If you are '   \
+                            # + 'using an external clock, check  your signal for the presence of '    \
+                            # + 'noise or glitches. Shot Failed. Stopping %s at sample %d of %d.'
+                        # self.logger.info(msg, name, current, total)
+                        # task.ClearTask()
+                        # DAQmxResetDevice(self.MAX_name)
+                        # self.start_manual_mode_tasks()
+                        # exception_flag = True
+                        # return True
                     except StartFailedDueToWriteFailureError:
                         task.GetWriteCurrWritePos(npts)
                         task.GetWriteTotalSampPerChanGenerated(samples)
@@ -402,22 +404,44 @@ class NI_DAQmxOutputWorker(Worker):
                         self.logger.info(msg, name, current, total)
                         task.ClearTask()
                         if self.FORCE_RESTART_USB == True:
+                            import subprocess
                             self.logger.info('Attempting to restart NI bus...')
                             try:
                                 _WindowsSdkDir
-                            except NameError:
+                            except (NameError, UnboundLocalError) as err:   
+                                import winreg
+                                reg = winreg.ConnectRegistry(None, winreg.HKEY_LOCAL_MACHINE)
                                 system_type = platform.architecture()
                                 if system_type == ('32bit', 'WindowsPE'):
-                                    _WindowsSdkDir = '"%WindowsSdkDir%\\tools\\x86\\devcon.exe"'
+                                    try:
+                                        key = winreg.OpenKey(reg, "SOFTWARE\\Microsoft\\Microsoft SDKs\\Windows\\v10.0")
+                                    except FileNotFoundError:
+                                        self.logger.info('Unable to locate devcon path. Is Windows SDK and WDK installed?')
+                                        _WindowsSdkDir = ''
+                                    else:
+                                        _WindowsSdkDir = winreg.QueryValueEx(key, "InstallationFolder")[0]
+                                        _WindowsSdkDir += 'Tools\\x86\\devcon.exe'
+                                        key.Close()  
                                 elif system_type == ('64bit', 'WindowsPE'):
-                                    _WindowsSdkDir = '"%WindowsSdkDir%\\tools\\x64\\devcon.exe"'
+                                    try:
+                                        key = winreg.OpenKey(reg, "SOFTWARE\\WOW6432Node\\Microsoft\\Microsoft SDKs\\Windows\\v10.1")
+                                    except FileNotFoundError:
+                                        self.logger.info('Unable to locate Windows Kits path. Is Windows SDK and WDK installed?')
+                                        _WindowsSdkDir = ''
+                                    else:
+                                        _WindowsSdkDir = winreg.QueryValueEx(key, "InstallationFolder")[0]
+                                        _WindowsSdkDir += 'Tools\\x64\\devcon.exe'
+                                        key.Close()
                                 else:
                                     self.logger.info('Warning: Unable to detect OS or not Windows platform.')
                                     _WindowsSdkDir = ''
-                            command = _WindowsSdkDir + ' restart *' + self.USB_bus_name + '*'
-                            result = subprocess.run(command, shell=True)
-                            threading.Event().wait(15)
-                            self.logger.info('Restart attempted. Result: %s', result)
+                            if os.path.exists(_WindowsSdkDir):
+                                command = '"' + _WindowsSdkDir + '" restart *' + self.USB_bus_name + '*'
+                                result = subprocess.run(command, shell=True)
+                                threading.Event().wait(15)
+                                self.logger.info('Restart attempted. Result: %s', result)
+                            else:
+                                self.logger.info('Restart aborted. Unable to locate devcon.')
                         DAQmxResetDevice(self.MAX_name)
                         self.start_manual_mode_tasks()
                         exception_flag = True
