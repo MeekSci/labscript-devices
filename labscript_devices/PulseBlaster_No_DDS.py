@@ -284,7 +284,6 @@ class PulseblasterNoDDSWorker(Worker):
         self.time_based_stop_workaround = False
         self.time_based_shot_duration = None
         self.time_based_shot_end_time = None
-        self.TIME_OUT_VALUE = self.PB_timeout_value
 
     def program_manual(self,values):
         # Program the DDS registers:
@@ -344,6 +343,7 @@ class PulseblasterNoDDSWorker(Worker):
             
     def transition_to_buffered(self,device_name,h5file,initial_values,fresh):
         self.h5file = h5file
+        self.TIME_OUT_VALUE = self.PB_timeout_value
         if self.programming_scheme == 'pb_stop_programming/STOP':
             # Need to ensure device is stopped before programming - or we wont know what line it's on.
             pb_stop()
