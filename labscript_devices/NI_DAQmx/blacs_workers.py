@@ -11,6 +11,8 @@
 #                                                                   #
 #####################################################################
 import sys
+import os
+import platform
 import time
 import threading
 from PyDAQmx import *
@@ -36,6 +38,7 @@ from .daqmx_utils import incomplete_sample_detection
 
 
 class NI_DAQmxOutputWorker(Worker):
+    FORCE_USB_RESTART = False
     def init(self):
         self.check_version()
         # Reset Device: clears previously added routes etc. Note: is insufficient for
@@ -350,22 +353,82 @@ class NI_DAQmxOutputWorker(Worker):
             self.DO_task = None
 
         for task, static, name in tasks:
+            exception_flag = False
             if not abort:
                 if not static:
                     try:
                         # Wait for task completion with a 1 second timeout:
                         task.WaitUntilTaskDone(1)
-                    finally:
-                        # Log where we were up to in sample generation, regardless of
-                        # whether the above succeeded:
+                    except DigOutputOverrunError:#StartFailedDueToWriteFailureError:
                         task.GetWriteCurrWritePos(npts)
                         task.GetWriteTotalSampPerChanGenerated(samples)
-                        # Detect -1 even though they're supposed to be unsigned ints, -1
-                        # seems to indicate the task was not started:
                         current = samples.value if samples.value != 2 ** 64 - 1 else -1
                         total = npts.value if npts.value != 2 ** 64 - 1 else -1
-                        msg = 'Stopping %s at sample %d of %d'
+                        msg = 'StartFailedDueToWriteFailureError occured. Task could not be started,'   \
+                            + ' because the driver could not write enough data to the device. This '    \
+                            + 'was due to system and/or bus-bandwidth limitations. Reduce the number '  \
+                            + 'of programs your computer is executing concurrently. If possible, '  \
+                            + 'perform operations with heavy bus usage sequentially instead of in ' \
+                            + 'parallel. If you can\'t eliminate the problem, contact National '    \
+                            + 'Instruments support at ni.com/support. Shot Failed. Stopping %s at ' \
+                            + 'sample %d of %d.'
                         self.logger.info(msg, name, current, total)
+                        task.ClearTask()
+                        if self.FORCE_USB_RESTART == True:
+                            import subprocess
+                            self.logger.info('Attempting to restart NI bus...')
+                            try:
+                                _WindowsSdkDir
+                            except (NameError, UnboundLocalError) as err:
+                                import winreg
+                                reg = winreg.ConnectRegistry(None, winreg.HKEY_LOCAL_MACHINE)
+                                system_type = platform.architecture()
+                                if system_type == ('32bit', 'WindowsPE'):
+                                    try:
+                                        key = winreg.OpenKey(reg, "SOFTWARE\\Microsoft\\Microsoft SDKs\\Windows\\v10.0")
+                                    except FileNotFoundError:
+                                        self.logger.info('Unable to locate devcon path. Is Windows SDK and WDK installed?')
+                                        _WindowsSdkDir = ''
+                                    else:
+                                        _WindowsSdkDir = winreg.QueryValueEx(key, "InstallationFolder")[0]
+                                        _WindowsSdkDir += 'Tools\\x86\\devcon.exe'
+                                        key.Close()
+                                elif system_type == ('64bit', 'WindowsPE'):
+                                    try:
+                                        key = winreg.OpenKey(reg, "SOFTWARE\\WOW6432Node\\Microsoft\\Microsoft SDKs\\Windows\\v10.0")
+                                    except FileNotFoundError:
+                                        self.logger.info('Unable to locate Windows Kits path. Is Windows SDK and WDK installed?')
+                                        _WindowsSdkDir = ''
+                                    else:
+                                        _WindowsSdkDir = winreg.QueryValueEx(key, "InstallationFolder")[0]
+                                        _WindowsSdkDir += 'Tools\\x64\\devcon.exe'
+                                        key.Close()
+                                else:
+                                    self.logger.info('Warning: Unable to detect OS or not Windows platform.')
+                                    _WindowsSdkDir = ''
+                            if os.path.exists(_WindowsSdkDir):
+                                command = '"' + _WindowsSdkDir + '" restart *' + self.ui.Device_ID.text() + '*'
+                                result = subprocess.run(command, shell=True)
+                                threading.Event().wait(15)
+                                self.logger.info('Restart attempted. Result: %s', result)
+                            else:
+                                self.logger.info('Restart aborted. Unable to locate devcon.')
+                        DAQmxResetDevice(self.MAX_name)
+                        self.start_manual_mode_tasks()
+                        exception_flag = True
+                        return True
+                    finally:
+                        if exception_flag == False:
+                            # Log where we were up to in sample generation, regardless of
+                            # whether the above succeeded:
+                            task.GetWriteCurrWritePos(npts)
+                            task.GetWriteTotalSampPerChanGenerated(samples)
+                            # Detect -1 even though they're supposed to be unsigned ints, -1
+                            # seems to indicate the task was not started:
+                            current = samples.value if samples.value != 2 ** 64 - 1 else -1
+                            total = npts.value if npts.value != 2 ** 64 - 1 else -1
+                            msg = 'Stopping %s at sample %d of %d'
+                            self.logger.info(msg, name, current, total)
                 task.StopTask()
             task.ClearTask()
 
@@ -385,6 +448,11 @@ class NI_DAQmxOutputWorker(Worker):
 
     def abort_buffered(self):
         return self.transition_to_manual(True)
+
+    def update_usb_restart(self, flag):
+        self.logger.info('Setting Windows Devcon NI device restart flag...')
+        self.FORCE_USB_RESTART = flag
+        return True
 
 
 class NI_DAQmxAcquisitionWorker(Worker):

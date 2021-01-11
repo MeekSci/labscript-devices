@@ -15,9 +15,17 @@ import h5py
 from labscript_utils import dedent
 
 from blacs.device_base_class import DeviceTab
+from blacs.device_base_class import define_state
+from blacs.tab_base_classes import MODE_MANUAL, MODE_TRANSITION_TO_BUFFERED, MODE_TRANSITION_TO_MANUAL, MODE_BUFFERED
+
 from .utils import split_conn_AO, split_conn_DO
 from . import models
 
+from qtutils import UiLoader
+import qtutils.icons
+import os
+from qtutils.qt import QtCore
+from qtutils.qt import QtGui
 
 class NI_DAQmxTab(DeviceTab):
     def initialise_GUI(self):
@@ -197,3 +205,37 @@ class NI_DAQmxTab(DeviceTab):
         # Set the capabilities of this device
         self.supports_remote_value_check(False)
         self.supports_smart_programming(False)
+
+        self.ui = UiLoader().load(os.path.join(os.path.dirname(os.path.realpath(__file__)),'NI_DAQmx.ui'))
+        self.get_tab_layout().addWidget(self.ui)
+        self.ui.DeviceFrame.hide()
+        self.ui.ForceRestart_Box.stateChanged.connect(self.enable_USB_restart)
+
+    @define_state(MODE_MANUAL|MODE_BUFFERED|MODE_TRANSITION_TO_BUFFERED, True, True)
+    def enable_USB_restart (self, state):
+        if state == QtCore.Qt.Checked:
+            self.ui.DeviceFrame.show()
+            result = yield(self.queue_work(self.primary_worker, 'update_usb_restart', True))
+            if result:
+                self.logger.info('Restart flag updated.')
+        else:
+            self.ui.DeviceFrame.hide()
+            result = yield(self.queue_work(self.primary_worker, 'update_usb_restart', False))
+            if result:
+                self.logger.info('Restart flag updated.')
+
+    def get_save_data(self):
+        #Get builtin settings to be restored
+        return {'_Device_ID_visible': self.ui.ForceRestart_Box.isChecked(),
+                '_Device_ID_value': self.ui.Device_ID.text()}
+
+    def restore_save_data(self, save_data):
+        if save_data:
+            if '_Device_ID_visible' in save_data:
+                vis = save_data['_Device_ID_visible']
+                self.ui.ForceRestart_Box.setChecked(vis)
+            if '_Device_ID_value' in save_data:
+                dev_id = save_data['_Device_ID_value']
+                self.ui.Device_ID.setText(dev_id)
+        else:
+            self.logger.warning('No previous front panel state to restore')
